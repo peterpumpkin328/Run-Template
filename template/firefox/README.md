@@ -1,0 +1,160 @@
+apiVersion: app.claw.cloud/v1
+kind: Template
+metadata:
+  name: firefox
+spec:
+  title: Firefox
+  type: official
+  author: ClawCloud Run
+  author_id: 180503656
+  date: 2026-03-08
+  url: https://www.mozilla.org/firefox/
+  gitRepo: https://github.com/jlesage/docker-firefox
+  description: Firefox Browser in a container with VNC/noVNC support
+  readme: https://github.com/jlesage/docker-firefox/blob/master/README.md
+  icon: https://www.mozilla.org/media/protocol/img/logos/firefox/logo-lg-high-res.png
+  templateType: inline
+  categories:
+    - browser
+  defaults:
+    app_host:
+      type: string
+      value: ${{ random(8) }}
+    app_name:
+      type: string
+      value: firefox-${{ random(8) }}
+  inputs:
+    volume_size:
+      description: 'Config volume size (Gi)'
+      type: string
+      default: '1'
+      required: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${{ defaults.app_name }}
+  annotations:
+    originImageName: jlesage/firefox
+    deploy.run.claw.cloud/minReplicas: '1'
+    deploy.run.claw.cloud/maxReplicas: '1'
+  labels:
+    run.claw.cloud/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  minReadySeconds: 10
+  serviceName: ${{ defaults.app_name }}
+  selector:
+    matchLabels:
+      app: ${{ defaults.app_name }}
+  template:
+    metadata:
+      labels:
+        app: ${{ defaults.app_name }}
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: ${{ defaults.app_name }}
+          image: jlesage/firefox
+          env:
+            - name: TZ
+              value: Asia/Tokyo
+            - name: DISPLAY_WIDTH
+              value: "1280"
+            - name: DISPLAY_HEIGHT
+              value: "720"
+            - name: KEEP_APP_RUNNING
+              value: "1"
+            - name: ENABLE_CJK_FONT
+              value: "1"
+            - name: VNC_PASSWORD
+              value: "admin"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1024Mi
+            limits:
+              cpu: 1000m
+              memory: 1024Mi
+          ports:
+            - containerPort: 5800
+              name: novnc
+            - containerPort: 5900
+              name: vnc
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+      volumes: []
+  volumeClaimTemplates:
+    - metadata:
+        annotations:
+          path: /config
+          value: '1'
+        name: config-volume
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: ${{ inputs.volume_size }}Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    run.claw.cloud/app-deploy-manager: ${{ defaults.app_name }}
+spec:
+  ports:
+    - name: novnc
+      port: 5800
+      targetPort: 5800
+    - name: vnc
+      port: 5900
+      targetPort: 5900
+  selector:
+    app: ${{ defaults.app_name }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${{ defaults.app_name }}-novnc
+  labels:
+    run.claw.cloud/app-deploy-manager: ${{ defaults.app_name }}
+    run.claw.cloud/app-deploy-manager-domain: ${{ defaults.app_host }}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/server-snippet: |
+      client_header_buffer_size 64k;
+      large_client_header_buffers 4 128k;
+    nginx.ingress.kubernetes.io/ssl-redirect: 'false'
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/client-body-buffer-size: 64k
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 64k
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      if ($request_uri ~* \.(js|css|gif|jpe?g|png)) {
+        expires 30d;
+        add_header Cache-Control "public";
+      }
+spec:
+  rules:
+    - host: ${{ defaults.app_host }}.${{ CLAWCLOUD_CLOUD_DOMAIN }}
+      http:
+        paths:
+          - pathType: Prefix
+            path: /()(.*)
+            backend:
+              service:
+                name: ${{ defaults.app_name }}
+                port:
+                  number: 5800
+  tls:
+    - hosts:
+        - ${{ defaults.app_host }}.${{ CLAWCLOUD_CLOUD_DOMAIN }}
+      secretName: ${{ CLAWCLOUD_CERT_SECRET_NAME }}
+
