@@ -1,75 +1,160 @@
-# ClawCloud Run Template for Firefox
+apiVersion: app.claw.cloud/v1
+kind: Template
+metadata:
+  name: firefox
+spec:
+  title: Firefox
+  type: official
+  author: ClawCloud Run
+  author_id: 180503656
+  date: 2026-03-08
+  url: https://www.mozilla.org/firefox/
+  gitRepo: https://github.com/jlesage/docker-firefox
+  description: Firefox Browser in a container with VNC/noVNC support
+  readme: https://github.com/jlesage/docker-firefox/blob/master/README.md
+  icon: https://www.mozilla.org/media/protocol/img/logos/firefox/logo-lg-high-res.png
+  templateType: inline
+  categories:
+    - browser
+  defaults:
+    app_host:
+      type: string
+      value: ${{ random(8) }}
+    app_name:
+      type: string
+      value: firefox-${{ random(8) }}
+  inputs:
+    volume_size:
+      description: 'Config volume size (Gi)'
+      type: string
+      default: '1'
+      required: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${{ defaults.app_name }}
+  annotations:
+    originImageName: jlesage/firefox
+    deploy.run.claw.cloud/minReplicas: '1'
+    deploy.run.claw.cloud/maxReplicas: '1'
+  labels:
+    run.claw.cloud/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  minReadySeconds: 10
+  serviceName: ${{ defaults.app_name }}
+  selector:
+    matchLabels:
+      app: ${{ defaults.app_name }}
+  template:
+    metadata:
+      labels:
+        app: ${{ defaults.app_name }}
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: ${{ defaults.app_name }}
+          image: jlesage/firefox
+          env:
+            - name: TZ
+              value: Asia/Tokyo
+            - name: DISPLAY_WIDTH
+              value: "1280"
+            - name: DISPLAY_HEIGHT
+              value: "720"
+            - name: KEEP_APP_RUNNING
+              value: "1"
+            - name: ENABLE_CJK_FONT
+              value: "1"
+            - name: VNC_PASSWORD
+              value: "admin"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1024Mi
+            limits:
+              cpu: 1000m
+              memory: 1024Mi
+          ports:
+            - containerPort: 5800
+              name: novnc
+            - containerPort: 5900
+              name: vnc
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+      volumes: []
+  volumeClaimTemplates:
+    - metadata:
+        annotations:
+          path: /config
+          value: '1'
+        name: config-volume
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: ${{ inputs.volume_size }}Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    run.claw.cloud/app-deploy-manager: ${{ defaults.app_name }}
+spec:
+  ports:
+    - name: novnc
+      port: 5800
+      targetPort: 5800
+    - name: vnc
+      port: 5900
+      targetPort: 5900
+  selector:
+    app: ${{ defaults.app_name }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${{ defaults.app_name }}-novnc
+  labels:
+    run.claw.cloud/app-deploy-manager: ${{ defaults.app_name }}
+    run.claw.cloud/app-deploy-manager-domain: ${{ defaults.app_host }}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/server-snippet: |
+      client_header_buffer_size 64k;
+      large_client_header_buffers 4 128k;
+    nginx.ingress.kubernetes.io/ssl-redirect: 'false'
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/client-body-buffer-size: 64k
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 64k
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      if ($request_uri ~* \.(js|css|gif|jpe?g|png)) {
+        expires 30d;
+        add_header Cache-Control "public";
+      }
+spec:
+  rules:
+    - host: ${{ defaults.app_host }}.${{ CLAWCLOUD_CLOUD_DOMAIN }}
+      http:
+        paths:
+          - pathType: Prefix
+            path: /()(.*)
+            backend:
+              service:
+                name: ${{ defaults.app_name }}
+                port:
+                  number: 5800
+  tls:
+    - hosts:
+        - ${{ defaults.app_host }}.${{ CLAWCLOUD_CLOUD_DOMAIN }}
+      secretName: ${{ CLAWCLOUD_CERT_SECRET_NAME }}
 
-## Overview
-
-This template provides a Kubernetes-based deployment solution for [Mozilla Firefox](https://www.mozilla.org/firefox/) on the ClawCloud Run platform. The template creates a containerized Firefox instance with both web (noVNC) and VNC access, making it easy to deploy a browser environment with persistent storage.
-
-## Features
-
-- **Browser Access**: Modern web interface via noVNC (port 5800)
-- **VNC Access**: Direct VNC connection (port 5900)
-- **Persistent Storage**: Configurable local storage (default 1Gi)
-- **Time Zone Support**: Customizable timezone settings
-- **Display Configuration**: Adjustable window size (1280x720 default)
-- **Security**: VNC password protection
-- **Font Support**: CJK font support for Asian languages
-- **Resource Limits**: Configurable CPU and memory limits
-
-## Configuration Parameters
-
-### Environment Variables
-
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `TZ` | Timezone setting | Asia/Tokyo |
-| `DISPLAY_WIDTH` | Browser window width | 1280 |
-| `DISPLAY_HEIGHT` | Browser window height | 720 |
-| `KEEP_APP_RUNNING` | Keep application running if crashes | 1 |
-| `ENABLE_CJK_FONT` | Enable CJK font support | 1 |
-| `VNC_PASSWORD` | VNC access password | admin |
-
-### Resource Limits
-
-| Resource | Request | Limit |
-|----------|---------|-------|
-| CPU | 100m | 1000m |
-| Memory | 1024Mi | 1024Mi |
-
-### Storage
-
-| Volume | Size | Path | Access Mode |
-|--------|------|------|-------------|
-| config-volume | 1Gi (configurable) | /config | ReadWriteOnce |
-
-## Access Methods
-
-### Web Access (noVNC)
-- **URL**: `http://${{ defaults.app_host }}.${{ CLAWCLOUD_CLOUD_DOMAIN }}:5800`
-- **Port**: 5800
-- **Protocol**: HTTP (noVNC)
-
-### Direct VNC Access
-- **Host**: `${{ defaults.app_host }}.${{ CLAWCLOUD_CLOUD_DOMAIN }}`
-- **Port**: 5900
-- **Protocol**: VNC
-- **Password**: Configured via `VNC_PASSWORD` environment variable (default: "admin")
-
-## Deployment Notes
-
-1. **Persistent Storage**: The template includes a persistent volume claim for storing browser configuration and data. The default size is 1Gi but can be modified through the `volume_size` input parameter.
-
-2. **Security**: 
-   - VNC access is password protected (default: "admin")
-   - Web access uses the platform's SSL certificate
-   - Consider changing the default VNC password in production environments
-
-3. **Scaling**: The deployment is configured as a StatefulSet with a single replica (min/max 1). For browser applications, multiple replicas may cause session issues.
-
-4. **Resource Allocation**: The template allocates 1 CPU core and 1GB of memory by default, which should be sufficient for typical browsing workloads.
-
-## Support and Troubleshooting
-
-For assistance with this template or the Firefox deployment:
-
-1. Check the [original Docker Firefox documentation](https://github.com/jlesage/docker-firefox/blob/master/README.md) for container-specific details
-2. Consult the [ClawCloud Run documentation](https://docs.run.claw.cloud) for platform-specific guidance
