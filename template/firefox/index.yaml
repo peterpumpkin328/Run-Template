@@ -15,7 +15,7 @@ spec:
   icon: https://www.mozilla.org/media/protocol/img/logos/firefox/logo-lg-high-res.png
   templateType: inline
   categories:
-    - browser
+    - tool
   defaults:
     app_host:
       type: string
